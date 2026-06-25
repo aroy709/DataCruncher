@@ -1,10 +1,11 @@
 import logging
+import time
 import traceback
 import pandas as pd
 import numpy as np
 from typing import Any
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("datacruncher.analyzer")
 
 JOB_STORE: dict[str, dict[str, Any]] = {}
 
@@ -17,6 +18,9 @@ MIN_ROWS_FOR_CLUSTERING = 10_000
 def _update(job_id: str, progress: float, message: str):
     JOB_STORE[job_id]["progress"] = progress
     JOB_STORE[job_id]["message"] = message
+    # Briefly release the GIL so Flask HTTP threads can process status/results
+    # requests without waiting for the full pandas stage to complete.
+    time.sleep(0)
 
 
 def _safe_join(series: pd.Series, sep: str = " | ", limit: int = 5) -> str:

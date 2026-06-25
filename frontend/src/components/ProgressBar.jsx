@@ -21,7 +21,7 @@ export default function ProgressBar({ jobId, onComplete, onPartialReady, hidden 
 
     async function poll() {
       try {
-        const { data } = await axios.get(`/status/${jobId}`)
+        const { data } = await axios.get(`/status/${jobId}`, { timeout: 8000 })
         if (cancelled) return
 
         setProgress(data.progress)
@@ -44,8 +44,8 @@ export default function ProgressBar({ jobId, onComplete, onPartialReady, hidden 
 
         if (data.status === 'complete') {
           const [analysisRes, colRes] = await Promise.all([
-            axios.get(`/analysis/${jobId}`),
-            axios.get(`/columns/${jobId}`),
+            axios.get(`/analysis/${jobId}`, { timeout: 15000 }),
+            axios.get(`/columns/${jobId}`,  { timeout: 15000 }),
           ])
           if (!cancelled) onComplete(analysisRes.data, colRes.data)
           return

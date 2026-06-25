@@ -73,10 +73,17 @@ export default function App() {
   }
 
   async function loadResults(id, p) {
-    const res = await fetch(`/results/${id}?page=${p}&limit=100`)
-    const data = await res.json()
-    setResults(data)
-    setPage(p)
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 20_000)   // 20s hard timeout
+    try {
+      const res = await fetch(`/results/${id}?page=${p}&limit=100`, { signal: ctrl.signal })
+      if (!res.ok) throw new Error(`/results returned ${res.status}`)
+      const data = await res.json()
+      setResults(data)
+      setPage(p)
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   async function handlePageChange(newPage) {
