@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 
 echo "Starting backend on http://localhost:8000 ..."
 cd "$ROOT/backend"
-python3 -m uvicorn main:app --reload --port 8000 &
+python3 main.py &
 BACKEND_PID=$!
 
 echo "Starting frontend on http://localhost:5173 ..."

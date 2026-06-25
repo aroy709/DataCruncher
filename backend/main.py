@@ -1,24 +1,17 @@
 import io
 import json
+import threading
 import uuid
 from pathlib import Path
 
 import pandas as pd
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from flask import Flask, jsonify, request, send_file
+from flask_cors import CORS
 
 from analyzer import JOB_STORE, run_analysis, run_reanalysis
 
-app = FastAPI(title="DataCruncher API")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = Flask(__name__)
+CORS(app, origins=["http://localhost:5173", "http://127.0.0.1:5173"])
 
 UPLOAD_DIR = Path(__file__).parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -27,20 +20,23 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 # ── Upload ─────────────────────────────────────────────────────────────────────
 
 @app.post("/upload")
-async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+def upload_file():
+    if "file" not in request.files:
+        return jsonify({"detail": "No file provided"}), 400
+
+    file = request.files["file"]
     ext = Path(file.filename or "").suffix.lower()
     if ext not in {".csv", ".xlsx", ".xls", ".json"}:
-        raise HTTPException(400, f"Unsupported file type: {ext}")
+        return jsonify({"detail": f"Unsupported file type: {ext}"}), 400
 
     job_id = str(uuid.uuid4())
     dest = UPLOAD_DIR / f"{job_id}{ext}"
-    content = await file.read()
-    dest.write_bytes(content)
+    file.save(dest)
 
     try:
         df = _parse_file(dest, ext)
     except Exception as exc:
-        raise HTTPException(422, f"Could not parse file: {exc}")
+        return jsonify({"detail": f"Could not parse file: {exc}"}), 422
 
     JOB_STORE[job_id] = {
         "status": "queued",
@@ -54,51 +50,58 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
         "string_cols": [],
     }
 
-    background_tasks.add_task(run_analysis, job_id, df)
-    return {"job_id": job_id}
+    threading.Thread(target=run_analysis, args=(job_id, df), daemon=True).start()
+    return jsonify({"job_id": job_id})
 
 
 # ── Status ─────────────────────────────────────────────────────────────────────
 
-@app.get("/status/{job_id}")
-def get_status(job_id: str):
-    job = _get_job(job_id)
-    return {
+@app.get("/status/<job_id>")
+def get_status(job_id):
+    job, err = _get_job(job_id)
+    if err:
+        return err
+    return jsonify({
         "status": job["status"],
         "progress": job["progress"],
         "message": job["message"],
-    }
+    })
 
 
 # ── Analysis explanation ───────────────────────────────────────────────────────
 
-@app.get("/analysis/{job_id}")
-def get_analysis(job_id: str):
-    job = _get_job(job_id)
+@app.get("/analysis/<job_id>")
+def get_analysis(job_id):
+    job, err = _get_job(job_id)
+    if err:
+        return err
     if job["status"] != "complete":
-        raise HTTPException(400, "Analysis not complete yet")
-    return job["analysis"]
+        return jsonify({"detail": "Analysis not complete yet"}), 400
+    return jsonify(job["analysis"])
 
 
 # ── Results (paginated) ────────────────────────────────────────────────────────
 
-@app.get("/results/{job_id}")
-def get_results(job_id: str, page: int = 1, limit: int = 100):
-    job = _get_job(job_id)
+@app.get("/results/<job_id>")
+def get_results(job_id):
+    job, err = _get_job(job_id)
+    if err:
+        return err
     if job["status"] != "complete":
-        raise HTTPException(400, "Results not ready yet")
+        return jsonify({"detail": "Results not ready yet"}), 400
+
+    page = int(request.args.get("page", 1))
+    limit = int(request.args.get("limit", 100))
 
     df: pd.DataFrame = job["df_result"]
     total = len(df)
     start = (page - 1) * limit
-    end = start + limit
-    page_df = df.iloc[start:end]
+    page_df = df.iloc[start:start + limit]
 
-    # Replace NaN/inf with None for JSON safety
     page_df = page_df.replace({float("inf"): None, float("-inf"): None})
     page_df = page_df.where(page_df.notna(), other=None)
 
-    return {
+    return jsonify({
         "data": page_df.to_dict(orient="records"),
         "columns": list(df.columns),
         "total": total,
@@ -107,76 +110,82 @@ def get_results(job_id: str, page: int = 1, limit: int = 100):
         "original_count": job["analysis"]["original_count"],
         "compressed_count": job["analysis"]["compressed_count"],
         "compression_ratio": job["analysis"]["compression_ratio"],
-    }
+    })
 
 
 # ── Re-analyse with custom config ─────────────────────────────────────────────
 
-class ReanalyzeRequest(BaseModel):
-    grouping_keys: list[str] = []
-    aggregations: dict[str, str] = {}
-    filters: list[dict] = []
-
-
-@app.post("/reanalyze/{job_id}")
-def reanalyze(job_id: str, req: ReanalyzeRequest, background_tasks: BackgroundTasks):
-    job = _get_job(job_id)
+@app.post("/reanalyze/<job_id>")
+def reanalyze(job_id):
+    job, err = _get_job(job_id)
+    if err:
+        return err
     if job["df_original"] is None:
-        raise HTTPException(400, "Original data not available")
+        return jsonify({"detail": "Original data not available"}), 400
+
+    body = request.get_json(force=True) or {}
+    grouping_keys = body.get("grouping_keys", [])
+    aggregations = body.get("aggregations", {})
+    filters = body.get("filters", [])
 
     job["status"] = "queued"
     job["progress"] = 0.0
     job["message"] = "Queued for re-analysis…"
 
-    background_tasks.add_task(
-        run_reanalysis,
-        job_id,
-        req.grouping_keys,
-        req.aggregations,
-        req.filters,
-    )
-    return {"job_id": job_id, "status": "queued"}
+    threading.Thread(
+        target=run_reanalysis,
+        args=(job_id, grouping_keys, aggregations, filters),
+        daemon=True,
+    ).start()
+    return jsonify({"job_id": job_id, "status": "queued"})
 
 
 # ── Export ─────────────────────────────────────────────────────────────────────
 
-@app.get("/export/{job_id}")
-def export_results(job_id: str, format: str = "csv"):
-    job = _get_job(job_id)
+@app.get("/export/<job_id>")
+def export_results(job_id):
+    job, err = _get_job(job_id)
+    if err:
+        return err
     if job["status"] != "complete":
-        raise HTTPException(400, "Results not ready yet")
+        return jsonify({"detail": "Results not ready yet"}), 400
 
+    fmt = request.args.get("format", "csv")
     df: pd.DataFrame = job["df_result"]
     df = df.replace({float("inf"): None, float("-inf"): None})
 
-    if format == "xlsx":
+    if fmt == "xlsx":
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as writer:
             df.to_excel(writer, index=False, sheet_name="Compressed")
         buf.seek(0)
-        return StreamingResponse(
+        return send_file(
             buf,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f"attachment; filename=compressed_{job_id}.xlsx"},
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name=f"compressed_{job_id}.xlsx",
         )
     else:
-        buf = io.StringIO()
-        df.to_csv(buf, index=False)
+        buf = io.BytesIO(df.to_csv(index=False).encode())
         buf.seek(0)
-        return StreamingResponse(
-            io.BytesIO(buf.getvalue().encode()),
-            media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename=compressed_{job_id}.csv"},
+        return send_file(
+            buf,
+            mimetype="text/csv",
+            as_attachment=True,
+            download_name=f"compressed_{job_id}.csv",
         )
 
 
 # ── Column metadata (for CustomisePanel) ──────────────────────────────────────
 
-@app.get("/columns/{job_id}")
-def get_columns(job_id: str):
-    job = _get_job(job_id)
+@app.get("/columns/<job_id>")
+def get_columns(job_id):
+    job, err = _get_job(job_id)
+    if err:
+        return err
     if job["df_original"] is None:
-        raise HTTPException(400, "Data not available")
+        return jsonify({"detail": "Data not available"}), 400
+
     df: pd.DataFrame = job["df_original"]
     cols = []
     for col in df.columns:
@@ -187,21 +196,21 @@ def get_columns(job_id: str):
             "unique_count": int(df[col].nunique()),
             "sample": [str(v) for v in df[col].dropna().unique()[:5]],
         })
-    return {
+    return jsonify({
         "columns": cols,
         "current_grouping_keys": job.get("grouping_keys", []),
         "current_numeric_cols": job.get("numeric_cols", []),
         "current_string_cols": job.get("string_cols", []),
-    }
+    })
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def _get_job(job_id: str) -> dict:
+def _get_job(job_id: str):
     job = JOB_STORE.get(job_id)
     if job is None:
-        raise HTTPException(404, f"Job {job_id} not found")
-    return job
+        return None, (jsonify({"detail": f"Job {job_id} not found"}), 404)
+    return job, None
 
 
 def _parse_file(path: Path, ext: str) -> pd.DataFrame:
@@ -219,3 +228,7 @@ def _parse_file(path: Path, ext: str) -> pd.DataFrame:
         else:
             raise ValueError("JSON must be an array or object")
     raise ValueError(f"Unknown extension: {ext}")
+
+
+if __name__ == "__main__":
+    app.run(port=8000, debug=True)

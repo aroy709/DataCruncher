@@ -6,13 +6,13 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/upload': 'http://localhost:8000',
-      '/status': 'http://localhost:8000',
-      '/analysis': 'http://localhost:8000',
-      '/results': 'http://localhost:8000',
-      '/reanalyze': 'http://localhost:8000',
-      '/export': 'http://localhost:8000',
-      '/columns': 'http://localhost:8000',
+      '/upload':    { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
+      '/status':    { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
+      '/analysis':  { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
+      '/results':   { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
+      '/reanalyze': { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
+      '/export':    { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
+      '/columns':   { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
     },
   },
 })
