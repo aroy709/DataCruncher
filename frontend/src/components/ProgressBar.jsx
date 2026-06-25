@@ -3,11 +3,18 @@ import axios from 'axios'
 
 const POLL_INTERVAL = 1500
 
-export default function ProgressBar({ jobId, onComplete }) {
+/**
+ * hidden=true  → renders nothing but keeps polling (so onPartialReady / onComplete still fire
+ *                 while the parent shows partial results)
+ * onPartialReady → called once when stages_complete >= 3 (GroupBy done, data available)
+ * onComplete     → called when status === 'complete' with (analysis, colMeta)
+ */
+export default function ProgressBar({ jobId, onComplete, onPartialReady, hidden }) {
   const [progress, setProgress] = useState(0)
   const [message, setMessage] = useState('Starting…')
   const [error, setError] = useState(null)
   const timerRef = useRef(null)
+  const partialFiredRef = useRef(false)
 
   useEffect(() => {
     let cancelled = false
@@ -25,8 +32,17 @@ export default function ProgressBar({ jobId, onComplete }) {
           return
         }
 
+        // Fire partial-ready once as soon as stage 3 (GroupBy) finishes
+        if (
+          !partialFiredRef.current &&
+          data.stages_complete >= 3 &&
+          data.status === 'processing'
+        ) {
+          partialFiredRef.current = true
+          onPartialReady?.()
+        }
+
         if (data.status === 'complete') {
-          // Fetch analysis + column metadata in parallel
           const [analysisRes, colRes] = await Promise.all([
             axios.get(`/analysis/${jobId}`),
             axios.get(`/columns/${jobId}`),
@@ -47,6 +63,9 @@ export default function ProgressBar({ jobId, onComplete }) {
       clearTimeout(timerRef.current)
     }
   }, [jobId])
+
+  // When hidden: don't render any UI but keep effects running so polling continues
+  if (hidden) return null
 
   const pct = Math.round(progress * 100)
 
@@ -74,11 +93,11 @@ export default function ProgressBar({ jobId, onComplete }) {
         {/* Stage steps */}
         <div className="mt-6 grid grid-cols-5 gap-1">
           {[
-            { label: 'Dedup', threshold: 0.20 },
-            { label: 'Profile', threshold: 0.45 },
-            { label: 'Compress', threshold: 0.70 },
+            { label: 'Dedup',     threshold: 0.20 },
+            { label: 'Profile',   threshold: 0.45 },
+            { label: 'Compress',  threshold: 0.70 },
             { label: 'Normalise', threshold: 0.85 },
-            { label: 'Done', threshold: 1.00 },
+            { label: 'Done',      threshold: 1.00 },
           ].map(({ label, threshold }) => (
             <div key={label} className="flex flex-col items-center gap-1">
               <div className={`w-3 h-3 rounded-full border-2 transition-colors

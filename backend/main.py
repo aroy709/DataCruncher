@@ -65,6 +65,7 @@ def get_status(job_id):
         "status": job["status"],
         "progress": job["progress"],
         "message": job["message"],
+        "stages_complete": job.get("stages_complete", 0),
     })
 
 
@@ -87,13 +88,16 @@ def get_results(job_id):
     job, err = _get_job(job_id)
     if err:
         return err
-    if job["status"] != "complete":
-        return jsonify({"detail": "Results not ready yet"}), 400
+
+    # Allow partial results as soon as stage 3 (GroupBy) has published df_result
+    df: pd.DataFrame | None = job.get("df_result")
+    if df is None:
+        return jsonify({"detail": "Results not ready yet — waiting for stage 3"}), 400
+
+    is_partial = job["status"] != "complete"
 
     page = int(request.args.get("page", 1))
     limit = int(request.args.get("limit", 100))
-
-    df: pd.DataFrame = job["df_result"]
     total = len(df)
     start = (page - 1) * limit
     page_df = df.iloc[start:start + limit]
@@ -101,15 +105,25 @@ def get_results(job_id):
     page_df = page_df.replace({float("inf"): None, float("-inf"): None})
     page_df = page_df.where(page_df.notna(), other=None)
 
+    if is_partial:
+        original_count = job.get("original_count_snapshot", total)
+        compressed_count = total
+        compression_ratio = 0.0
+    else:
+        original_count = job["analysis"]["original_count"]
+        compressed_count = job["analysis"]["compressed_count"]
+        compression_ratio = job["analysis"]["compression_ratio"]
+
     return jsonify({
         "data": page_df.to_dict(orient="records"),
         "columns": list(df.columns),
         "total": total,
         "page": page,
         "limit": limit,
-        "original_count": job["analysis"]["original_count"],
-        "compressed_count": job["analysis"]["compressed_count"],
-        "compression_ratio": job["analysis"]["compression_ratio"],
+        "is_partial": is_partial,
+        "original_count": original_count,
+        "compressed_count": compressed_count,
+        "compression_ratio": compression_ratio,
     })
 
 

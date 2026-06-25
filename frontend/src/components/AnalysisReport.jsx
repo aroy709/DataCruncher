@@ -22,6 +22,7 @@ export default function AnalysisReport({ analysis, onAccept, onCustomise }) {
     compressed_count = 0,
     compression_ratio = 0,
     deep_compress_applied = false,
+    data_issues = [],
   } = analysis
 
   return (
@@ -128,6 +129,24 @@ export default function AnalysisReport({ analysis, onAccept, onCustomise }) {
             Dataset was still large after grouping, so numeric columns were clustered using MiniBatch KMeans.
             Each cluster was then collapsed, providing additional compression.
           </p>
+        </Section>
+      )}
+
+      {/* Data quality issues */}
+      {data_issues.length > 0 && (
+        <Section title="Data Quality Notes">
+          <p className="text-sm text-gray-500 mb-3">
+            The following issues were detected and handled automatically. Affected rows or values were
+            skipped rather than letting them crash the analysis.
+          </p>
+          <ul className="space-y-1.5">
+            {data_issues.map((issue, i) => (
+              <li key={i} className="flex items-start gap-2 text-sm bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                <span className="text-amber-500 mt-0.5 shrink-0">⚠</span>
+                <span className="text-amber-800">{issue}</span>
+              </li>
+            ))}
+          </ul>
         </Section>
       )}
 
