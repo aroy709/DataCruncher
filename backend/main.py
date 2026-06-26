@@ -194,11 +194,12 @@ def reanalyze(job_id):
         return jsonify({"detail": "Original data not available"}), 400
 
     body = request.get_json(force=True) or {}
-    grouping_keys = body.get("grouping_keys", [])
-    aggregations  = body.get("aggregations", {})
-    filters       = body.get("filters", [])
+    grouping_keys      = body.get("grouping_keys", [])
+    aggregations       = body.get("aggregations", {})
+    filters            = body.get("filters", [])
+    conditional_labels = body.get("conditional_labels", [])
 
-    logger.info(f"[{job_id}] Re-analysis requested — keys={grouping_keys} filters={len(filters)}")
+    logger.info(f"[{job_id}] Re-analysis requested — keys={grouping_keys} filters={len(filters)} cond_labels={len(conditional_labels)}")
 
     job["status"]   = "queued"
     job["progress"] = 0.0
@@ -206,7 +207,7 @@ def reanalyze(job_id):
 
     threading.Thread(
         target=run_reanalysis,
-        args=(job_id, grouping_keys, aggregations, filters),
+        args=(job_id, grouping_keys, aggregations, filters, conditional_labels),
         daemon=True,
     ).start()
     return jsonify({"job_id": job_id, "status": "queued"})

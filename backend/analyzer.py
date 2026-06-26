@@ -54,6 +54,39 @@ def _safe_mode(series: pd.Series):
             return None
 
 
+def _apply_conditional_labels(df: pd.DataFrame, conditional_labels: list[dict], issues: list) -> pd.DataFrame:
+    """Evaluate conditions on the grouped result and add computed label columns."""
+    df = df.copy()
+    for cl in conditional_labels:
+        label_col  = cl.get("label_column", "Label")
+        default    = cl.get("default_label", "")
+        conditions = cl.get("conditions", [])
+        df[label_col] = default
+        for cond in conditions:
+            col   = cond.get("column")
+            op    = cond.get("op")
+            val   = cond.get("value")
+            label = cond.get("label", "")
+            if not col or col not in df.columns:
+                issues.append(f"Conditional label: column '{col}' not found")
+                continue
+            try:
+                num = pd.to_numeric(df[col], errors="coerce")
+                if   op == "gt":  mask = num > float(val)
+                elif op == "lt":  mask = num < float(val)
+                elif op == "gte": mask = num >= float(val)
+                elif op == "lte": mask = num <= float(val)
+                elif op == "eq":  mask = df[col].astype(str) == str(val)
+                elif op == "neq": mask = df[col].astype(str) != str(val)
+                else:
+                    issues.append(f"Unknown op '{op}' in conditional label — skipped")
+                    continue
+                df.loc[mask, label_col] = label
+            except Exception as e:
+                issues.append(f"Conditional label on '{col}' ({op} '{val}'): {e}")
+    return df
+
+
 def _sanitize_df(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     """
     Pre-clean the dataframe before analysis:
@@ -256,7 +289,7 @@ def run_analysis(job_id: str, df: pd.DataFrame):
         JOB_STORE[job_id]["data_issues"] = data_issues
 
 
-def run_reanalysis(job_id: str, grouping_keys: list[str], aggregations: dict[str, str], filters: list[dict]):
+def run_reanalysis(job_id: str, grouping_keys: list[str], aggregations: dict[str, str], filters: list[dict], conditional_labels: list[dict] | None = None):
     data_issues: list[str] = []
 
     try:
@@ -351,6 +384,13 @@ def run_reanalysis(job_id: str, grouping_keys: list[str], aggregations: dict[str
                 df_result = df
         else:
             df_result = df
+
+        if conditional_labels:
+            _update(job_id, 0.88, "Applying conditional labels…")
+            try:
+                df_result = _apply_conditional_labels(df_result, conditional_labels, data_issues)
+            except Exception as e:
+                data_issues.append(f"Conditional labels step failed: {e}")
 
         _update(job_id, 0.92, "Finalising custom results…")
 

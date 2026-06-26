@@ -7,7 +7,9 @@ const FILTER_OPS = [
   { value: 'neq', label: '≠ not equals' },
   { value: 'contains', label: '⊃ contains' },
   { value: 'gt', label: '> greater than' },
+  { value: 'gte', label: '>= greater or equal' },
   { value: 'lt', label: '< less than' },
+  { value: 'lte', label: '<= less or equal' },
 ]
 
 export default function CustomisePanel({ jobId, colMeta, onDone }) {
@@ -17,6 +19,7 @@ export default function CustomisePanel({ jobId, colMeta, onDone }) {
   const [groupingKeys, setGroupingKeys] = useState(new Set(initialKeys))
   const [aggregations, setAggregations] = useState({})
   const [filters, setFilters] = useState([])
+  const [conditionalLabels, setConditionalLabels] = useState([])
   const [running, setRunning] = useState(false)
   const [error, setError] = useState(null)
   const [progress, setProgress] = useState(null)
@@ -45,6 +48,36 @@ export default function CustomisePanel({ jobId, colMeta, onDone }) {
     setFilters(prev => prev.filter((_, idx) => idx !== i))
   }
 
+  function addLabelGroup() {
+    setConditionalLabels(prev => [...prev, { label_column: '', default_label: '', conditions: [] }])
+  }
+
+  function updateLabelGroup(gi, key, val) {
+    setConditionalLabels(prev => prev.map((g, i) => i === gi ? { ...g, [key]: val } : g))
+  }
+
+  function removeLabelGroup(gi) {
+    setConditionalLabels(prev => prev.filter((_, i) => i !== gi))
+  }
+
+  function addLabelCondition(gi) {
+    setConditionalLabels(prev => prev.map((g, i) =>
+      i === gi ? { ...g, conditions: [...g.conditions, { column: columns[0]?.name || '', op: 'gt', value: '', label: '' }] } : g
+    ))
+  }
+
+  function updateLabelCondition(gi, ci, key, val) {
+    setConditionalLabels(prev => prev.map((g, i) =>
+      i === gi ? { ...g, conditions: g.conditions.map((c, j) => j === ci ? { ...c, [key]: val } : c) } : g
+    ))
+  }
+
+  function removeLabelCondition(gi, ci) {
+    setConditionalLabels(prev => prev.map((g, i) =>
+      i === gi ? { ...g, conditions: g.conditions.filter((_, j) => j !== ci) } : g
+    ))
+  }
+
   async function handleRerun() {
     setRunning(true)
     setError(null)
@@ -54,6 +87,7 @@ export default function CustomisePanel({ jobId, colMeta, onDone }) {
         grouping_keys: [...groupingKeys],
         aggregations,
         filters: filters.filter(f => f.column && f.value),
+        conditional_labels: conditionalLabels.filter(cl => cl.label_column),
       })
 
       // Poll until done
@@ -174,6 +208,93 @@ export default function CustomisePanel({ jobId, colMeta, onDone }) {
           className="text-sm text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
         >
           <span className="text-lg leading-none">+</span> Add filter
+        </button>
+      </Card>
+
+      {/* Conditional Labels */}
+      <Card title="Conditional Labels" subtitle="After grouping, evaluate conditions on aggregated values to add a computed label column (e.g. mark Vulnerable / Non-Vulnerable based on CVE_Count sum).">
+        <div className="space-y-4">
+          {conditionalLabels.map((group, gi) => (
+            <div key={gi} className="border border-gray-200 rounded-xl p-4 space-y-3 bg-gray-50">
+              <div className="flex items-center gap-2">
+                <div className="flex-1 space-y-2">
+                  <div className="flex gap-2 items-center">
+                    <label className="text-xs text-gray-500 w-28 shrink-0">Label column name</label>
+                    <input
+                      value={group.label_column}
+                      onChange={e => updateLabelGroup(gi, 'label_column', e.target.value)}
+                      placeholder="e.g. Vulnerability_Status"
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 flex-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div className="flex gap-2 items-center">
+                    <label className="text-xs text-gray-500 w-28 shrink-0">Default label</label>
+                    <input
+                      value={group.default_label}
+                      onChange={e => updateLabelGroup(gi, 'default_label', e.target.value)}
+                      placeholder="e.g. Non-Vulnerable"
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 flex-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
+                <button onClick={() => removeLabelGroup(gi)} className="text-red-400 hover:text-red-600 text-xl leading-none px-1 self-start">×</button>
+              </div>
+
+              {group.conditions.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-xs text-gray-400 font-medium">Conditions (evaluated in order; first match wins)</p>
+                  {group.conditions.map((cond, ci) => (
+                    <div key={ci} className="flex items-center gap-2 bg-white rounded-lg p-2 border border-gray-200">
+                      <select
+                        value={cond.column}
+                        onChange={e => updateLabelCondition(gi, ci, 'column', e.target.value)}
+                        className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:outline-none"
+                      >
+                        {columns.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                      </select>
+                      <select
+                        value={cond.op}
+                        onChange={e => updateLabelCondition(gi, ci, 'op', e.target.value)}
+                        className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:outline-none"
+                      >
+                        {FILTER_OPS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      </select>
+                      <input
+                        value={cond.value}
+                        onChange={e => updateLabelCondition(gi, ci, 'value', e.target.value)}
+                        placeholder="value"
+                        className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 w-20 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      <span className="text-xs text-gray-400">→ label</span>
+                      <input
+                        value={cond.label}
+                        onChange={e => updateLabelCondition(gi, ci, 'label', e.target.value)}
+                        placeholder="e.g. Vulnerable"
+                        className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 flex-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      <button onClick={() => removeLabelCondition(gi, ci)} className="text-red-400 hover:text-red-600 text-lg leading-none px-1">×</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <button
+                onClick={() => addLabelCondition(gi)}
+                className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
+              >
+                <span className="text-base leading-none">+</span> Add condition
+              </button>
+            </div>
+          ))}
+        </div>
+        {conditionalLabels.length === 0 && (
+          <p className="text-sm text-gray-400 mb-3">No label rules added. Add one to segment grouped results by a condition.</p>
+        )}
+        <button
+          onClick={addLabelGroup}
+          className="text-sm text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1 mt-3"
+        >
+          <span className="text-lg leading-none">+</span> Add label group
         </button>
       </Card>
 
